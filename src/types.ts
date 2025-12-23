@@ -23,6 +23,7 @@ export interface SearchOptions {
   query: string;
   numResults?: number;
   timeout?: number;
+  domains?: string[];
 }
 
 export interface ContentExtractionOptions {
@@ -36,6 +37,7 @@ export interface WebSearchToolInput {
   limit?: number;
   includeContent?: boolean;
   maxContentLength?: number;
+  domains?: string[];
 }
 
 export interface WebSearchToolOutput {
