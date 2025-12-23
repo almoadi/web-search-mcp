@@ -117,9 +117,10 @@ export function urlMatchesDomain(url: string, allowedDomains: string[]): boolean
  * Builds a domain-filtered search query using site: operators
  * @param query - Original search query
  * @param domains - Array of domains to filter by
- * @returns Modified query with site: operators (e.g., "query site:example.com OR site:github.com")
+ * @param maxDomainsInQuery - Maximum number of domains to include in query (default: 10). If more domains provided, query is not modified and filtering happens post-search.
+ * @returns Modified query with site: operators (e.g., "query site:example.com OR site:github.com") or original query if too many domains
  */
-export function buildDomainFilteredQuery(query: string, domains: string[]): string {
+export function buildDomainFilteredQuery(query: string, domains: string[], maxDomainsInQuery: number = 10): string {
   if (!domains || domains.length === 0) {
     return query;
   }
@@ -130,6 +131,13 @@ export function buildDomainFilteredQuery(query: string, domains: string[]): stri
     .filter(domain => domain.length > 0); // Remove empty domains
   
   if (normalizedDomains.length === 0) {
+    return query;
+  }
+  
+  // If too many domains, don't modify query - rely on post-filtering instead
+  // This prevents query from becoming too long and causing search engine failures
+  if (normalizedDomains.length > maxDomainsInQuery) {
+    console.log(`[Utils] Too many domains (${normalizedDomains.length}), skipping query modification. Will filter results post-search.`);
     return query;
   }
   

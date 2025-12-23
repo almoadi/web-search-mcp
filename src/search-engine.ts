@@ -22,15 +22,19 @@ export class SearchEngine {
       ? domains.map(domain => normalizeDomain(domain)).filter(domain => domain.length > 0)
       : [];
     
-    // Apply domain filtering if domains are provided
+    // Apply domain filtering if domains are provided (but limit to 10 domains in query to avoid query length issues)
     const filteredQuery = normalizedDomains.length > 0
-      ? buildDomainFilteredQuery(query, normalizedDomains)
+      ? buildDomainFilteredQuery(query, normalizedDomains, 10)
       : query;
     
     const sanitizedQuery = sanitizeQuery(filteredQuery);
     
     if (normalizedDomains.length > 0) {
-      console.log(`[SearchEngine] Starting search for query: "${sanitizedQuery}" (filtered to domains: ${normalizedDomains.join(', ')})`);
+      if (normalizedDomains.length > 10) {
+        console.log(`[SearchEngine] Starting search for query: "${sanitizedQuery}" (${normalizedDomains.length} domains - will filter results post-search)`);
+      } else {
+        console.log(`[SearchEngine] Starting search for query: "${sanitizedQuery}" (filtered to domains: ${normalizedDomains.join(', ')})`);
+      }
     } else {
       console.log(`[SearchEngine] Starting search for query: "${sanitizedQuery}"`);
     }

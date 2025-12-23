@@ -33,7 +33,8 @@ export interface ContentExtractionOptions {
 }
 
 export interface WebSearchToolInput {
-  query: string;
+  query?: string;
+  keywords?: string[];
   limit?: number;
   includeContent?: boolean;
   maxContentLength?: number;
@@ -46,6 +47,15 @@ export interface WebSearchToolOutput {
   search_time_ms: number;
   query: string;
   status?: string;
+}
+
+// Keywords search output with additional metadata
+export interface KeywordsSearchOutput {
+  results: (SearchResult & { found_by_keyword?: string[] })[];
+  total_unique_results: number;
+  keywords_searched: string[];
+  search_time_ms: number;
+  status: string;
 }
 
 // New types for search summaries (snippets only)

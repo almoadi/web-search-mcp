@@ -4,8 +4,8 @@ console.log('Web Search API Server starting...');
 import express, { Request, Response, NextFunction } from 'express';
 import { SearchEngine } from './search-engine.js';
 import { EnhancedContentExtractor } from './enhanced-content-extractor.js';
-import { WebSearchToolInput, WebSearchToolOutput, SearchResult } from './types.js';
-import { isPdfUrl } from './utils.js';
+import { WebSearchToolInput, WebSearchToolOutput, SearchResult, KeywordsSearchOutput } from './types.js';
+import { isPdfUrl, normalizeDomain, urlMatchesDomain } from './utils.js';
 
 class WebSearchAPIServer {
   private app: express.Application;
@@ -62,13 +62,16 @@ class WebSearchAPIServer {
       try {
         console.log(`[API] POST /api/search - Body:`, JSON.stringify(req.body, null, 2));
 
-        const { query, limit = 5, includeContent = true, maxContentLength, domains } = req.body;
+        const { query, keywords, limit = 5, includeContent = true, maxContentLength, domains } = req.body;
 
-        // Validate query
-        if (!query || typeof query !== 'string') {
+        // Validate that at least one of query or keywords is provided
+        const hasQuery = query !== undefined && query !== null && typeof query === 'string' && query.trim().length > 0;
+        const hasKeywords = keywords !== undefined && Array.isArray(keywords) && keywords.length > 0;
+
+        if (!hasQuery && !hasKeywords) {
           return res.status(400).json({
             error: 'Invalid request',
-            message: 'query is required and must be a string',
+            message: 'Either query (string) or keywords (array of strings) must be provided',
           });
         }
 
@@ -123,8 +126,77 @@ class WebSearchAPIServer {
           }
         }
 
+        // Validate keywords if provided
+        let validatedKeywords: string[] | undefined;
+        if (hasKeywords) {
+          validatedKeywords = keywords.filter((k): k is string => typeof k === 'string' && k.trim().length > 0);
+          if (validatedKeywords.length === 0) {
+            return res.status(400).json({
+              error: 'Invalid request',
+              message: 'keywords array must contain at least one non-empty string',
+            });
+          }
+        }
+
+        // If keywords are provided (with or without query), use keywords search
+        if (hasKeywords) {
+          // Combine query with keywords if both provided
+          const allKeywords = hasQuery 
+            ? [query.trim(), ...validatedKeywords!]
+            : validatedKeywords!;
+
+          console.log(`[API] Starting keywords search with ${allKeywords.length} keywords:`, allKeywords);
+
+          const result = await this.handleKeywordsSearch(
+            allKeywords,
+            validatedLimit,
+            validatedIncludeContent,
+            validatedMaxContentLength,
+            validatedDomains
+          );
+
+          // Format response for keywords search
+          const response = {
+            success: true,
+            keywords_searched: result.keywords_searched,
+            total_unique_results: result.total_unique_results,
+            search_time_ms: result.search_time_ms,
+            status: result.status,
+            results: result.results.map((searchResult: any) => {
+              const formattedResult: any = {
+                title: searchResult.title,
+                url: searchResult.url,
+                description: searchResult.description,
+                timestamp: searchResult.timestamp,
+                fetchStatus: searchResult.fetchStatus,
+                found_by_keyword: searchResult.found_by_keyword || [],
+              };
+
+              if (searchResult.fullContent && searchResult.fullContent.trim()) {
+                formattedResult.fullContent = searchResult.fullContent;
+                formattedResult.wordCount = searchResult.wordCount;
+                if (searchResult.contentTruncated) {
+                  formattedResult.contentTruncated = true;
+                  formattedResult.originalLength = searchResult.originalLength;
+                }
+              } else if (searchResult.contentPreview && searchResult.contentPreview.trim()) {
+                formattedResult.contentPreview = searchResult.contentPreview;
+              }
+
+              if (searchResult.fetchStatus === 'error' && searchResult.error) {
+                formattedResult.error = searchResult.error;
+              }
+
+              return formattedResult;
+            }),
+          };
+
+          return res.json(response);
+        }
+
+        // Otherwise, use single query search (backward compatibility)
         const validatedArgs: WebSearchToolInput = {
-          query,
+          query: query!.trim(),
           limit: validatedLimit,
           includeContent: validatedIncludeContent,
           maxContentLength: validatedMaxContentLength,
@@ -357,9 +429,177 @@ class WebSearchAPIServer {
     });
   }
 
+  private async handleKeywordsSearch(
+    keywords: string[],
+    limit: number,
+    includeContent: boolean,
+    maxContentLength: number | undefined,
+    domains: string[] | undefined
+  ): Promise<KeywordsSearchOutput> {
+    const startTime = Date.now();
+    
+    console.log(`[API] handleKeywordsSearch called with ${keywords.length} keywords, limit=${limit}, includeContent=${includeContent}, domains=${domains ? domains.join(', ') : 'none'}`);
+
+    try {
+      // Calculate search limit per keyword (request more to account for deduplication)
+      // When many domains are provided, request more results since filtering will reduce the count
+      const perKeywordLimit = Math.min(Math.ceil(limit / keywords.length) + 2, 10);
+      const searchLimit = includeContent 
+        ? (domains && domains.length > 0 ? 10 : Math.min(perKeywordLimit * 2, 10))
+        : (domains && domains.length > 0 ? Math.min(perKeywordLimit * 3, 10) : perKeywordLimit);
+
+      console.log(`[API] Searching ${keywords.length} keywords with ${searchLimit} results per keyword${domains && domains.length > 10 ? ' (many domains - will rely on post-filtering)' : ''}`);
+
+      // Search each keyword separately with fallback if no results
+      const searchPromises = keywords.map(async (keyword) => {
+        try {
+          // First attempt: search with domains
+          let searchResponse = await this.searchEngine.search({
+            query: keyword,
+            numResults: searchLimit,
+            domains,
+          });
+
+          // Fallback: If we got 0 results and domains were specified, try without domain filtering
+          if (searchResponse.results.length === 0 && domains && domains.length > 0) {
+            console.log(`[API] Keyword "${keyword}" returned 0 results with domain filtering, trying without domain restrictions as fallback...`);
+            searchResponse = await this.searchEngine.search({
+              query: keyword,
+              numResults: searchLimit,
+              domains: undefined, // Remove domain filtering
+            });
+            
+            if (searchResponse.results.length > 0) {
+              console.log(`[API] Keyword "${keyword}": Fallback search found ${searchResponse.results.length} results (domain filtering disabled)`);
+            }
+          }
+
+          return {
+            keyword,
+            results: searchResponse.results,
+            engine: searchResponse.engine,
+          };
+        } catch (error) {
+          console.error(`[API] Error searching keyword "${keyword}":`, error);
+          return {
+            keyword,
+            results: [],
+            engine: 'None',
+            error: error instanceof Error ? error.message : 'Unknown error',
+          };
+        }
+      });
+
+      const keywordResults = await Promise.all(searchPromises);
+
+      // Log summary of keyword search results
+      const successfulKeywords: string[] = [];
+      const failedKeywords: string[] = [];
+      let totalResultsFound = 0;
+
+      keywordResults.forEach(({ keyword, results, error }) => {
+        if (error) {
+          failedKeywords.push(keyword);
+          console.error(`[API] Keyword "${keyword}" failed: ${error}`);
+        } else if (results.length > 0) {
+          successfulKeywords.push(keyword);
+          totalResultsFound += results.length;
+          console.log(`[API] Keyword "${keyword}" found ${results.length} results`);
+        } else {
+          failedKeywords.push(keyword);
+          console.warn(`[API] Keyword "${keyword}" returned 0 results`);
+        }
+      });
+
+      console.log(`[API] Keyword search summary: ${successfulKeywords.length}/${keywords.length} keywords succeeded, ${totalResultsFound} total results found`);
+
+      // Combine all results and track which keyword found each
+      const urlMap = new Map<string, { result: SearchResult; keywords: string[] }>();
+      
+      keywordResults.forEach(({ keyword, results, error }) => {
+        if (!error && results.length > 0) {
+          results.forEach((result) => {
+            const existing = urlMap.get(result.url);
+            if (existing) {
+              // URL already found, add this keyword to the list
+              if (!existing.keywords.includes(keyword)) {
+                existing.keywords.push(keyword);
+              }
+            } else {
+              // New URL, add it
+              urlMap.set(result.url, {
+                result,
+                keywords: [keyword],
+              });
+            }
+          });
+        }
+      });
+
+      // Convert map to array and add found_by_keyword field
+      const allResults: (SearchResult & { found_by_keyword?: string[] })[] = Array.from(urlMap.values()).map(({ result, keywords }) => ({
+        ...result,
+        found_by_keyword: keywords,
+      }));
+
+      console.log(`[API] Combined ${allResults.length} unique results from ${keywords.length} keyword searches (${successfulKeywords.length} successful, ${failedKeywords.length} failed)`);
+
+      // Filter out PDFs
+      const nonPdfResults = allResults.filter((result) => !isPdfUrl(result.url));
+      const pdfCount = allResults.length - nonPdfResults.length;
+
+      // Extract content if requested
+      const enhancedResults = includeContent
+        ? await this.contentExtractor.extractContentForResults(nonPdfResults, limit)
+        : nonPdfResults.slice(0, limit);
+
+      // Apply maxContentLength if specified
+      if (maxContentLength && maxContentLength > 0) {
+        enhancedResults.forEach((result) => {
+          if (result.fullContent && result.fullContent.length > maxContentLength) {
+            result.fullContent = result.fullContent.substring(0, maxContentLength);
+            (result as any).contentTruncated = true;
+            (result as any).originalLength = result.fullContent.length;
+          }
+        });
+      }
+
+      // Limit to requested limit
+      const finalResults = enhancedResults.slice(0, limit);
+
+      const searchTime = Date.now() - startTime;
+
+      // Calculate summary stats
+      const successCount = finalResults.filter((r) => r.fetchStatus === 'success').length;
+      const failedCount = finalResults.filter((r) => r.fetchStatus === 'error').length;
+
+      // Build detailed status message
+      const successfulKeywordCount = keywordResults.filter(({ error, results }) => !error && results.length > 0).length;
+      const failedKeywordCount = keywordResults.filter(({ error }) => error).length;
+      const zeroResultsKeywordCount = keywordResults.filter(({ error, results }) => !error && results.length === 0).length;
+      
+      const status = `Searched ${keywords.length} keywords (${successfulKeywordCount} succeeded, ${failedKeywordCount} errors, ${zeroResultsKeywordCount} no results); ${finalResults.length} unique results (${pdfCount} PDFs filtered); Successfully extracted: ${successCount}; Failed: ${failedCount}`;
+
+      return {
+        results: finalResults,
+        total_unique_results: finalResults.length,
+        keywords_searched: keywords,
+        search_time_ms: searchTime,
+        status,
+      };
+    } catch (error) {
+      console.error('[API] Keywords search error:', error);
+      throw new Error(`Keywords search failed: ${error instanceof Error ? error.message : 'Unknown error'}`);
+    }
+  }
+
   private async handleWebSearch(input: WebSearchToolInput): Promise<WebSearchToolOutput> {
     const startTime = Date.now();
     const { query, limit = 5, includeContent = true, domains } = input;
+
+    if (!query) {
+      throw new Error('Query is required for handleWebSearch');
+    }
 
     console.log(`[API] handleWebSearch called with limit=${limit}, includeContent=${includeContent}, domains=${domains ? domains.join(', ') : 'none'}`);
 
@@ -374,13 +614,30 @@ class WebSearchAPIServer {
 
       console.log(`[API] Requesting ${searchLimit} search results to get ${limit} non-PDF content results${domains && domains.length > 0 ? ' (with domain filtering)' : ''}`);
 
-      // Perform the search
-      const searchResponse = await this.searchEngine.search({
+      // Perform the search with fallback if no results
+      let searchResponse = await this.searchEngine.search({
         query,
         numResults: searchLimit,
         domains,
       });
-      const searchResults = searchResponse.results;
+      let searchResults = searchResponse.results;
+
+      // Fallback: If we got 0 results and domains were specified, try without domain filtering
+      if (searchResults.length === 0 && domains && domains.length > 0) {
+        console.log(`[API] Search returned 0 results with domain filtering, trying without domain restrictions as fallback...`);
+        searchResponse = await this.searchEngine.search({
+          query,
+          numResults: searchLimit,
+          domains: undefined, // Remove domain filtering
+        });
+        searchResults = searchResponse.results;
+        
+        if (searchResults.length > 0) {
+          console.log(`[API] Fallback search found ${searchResults.length} results (domain filtering disabled)`);
+        } else {
+          console.log(`[API] Fallback search also returned 0 results`);
+        }
+      }
 
       // Log search summary
       const pdfCount = searchResults.filter((result) => isPdfUrl(result.url)).length;

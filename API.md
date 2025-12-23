@@ -40,7 +40,7 @@ Check if the API server is running.
 
 Search the web and fetch complete page content from top results.
 
-**Request Body:**
+**Request Body (Single Query):**
 ```json
 {
   "query": "Python web scraping tutorial",
@@ -51,14 +51,45 @@ Search the web and fetch complete page content from top results.
 }
 ```
 
+**Request Body (Multiple Keywords):**
+```json
+{
+  "keywords": [
+    "Python web scraping",
+    "Python tutorial",
+    "web scraping guide"
+  ],
+  "limit": 10,
+  "includeContent": true,
+  "domains": ["github.com", "stackoverflow.com"]
+}
+```
+
+**Request Body (Both Query and Keywords):**
+```json
+{
+  "query": "Python",
+  "keywords": [
+    "web scraping",
+    "tutorial"
+  ],
+  "limit": 10,
+  "includeContent": true,
+  "domains": ["github.com"]
+}
+```
+
 **Parameters:**
-- `query` (required, string): Search query to execute
-- `limit` (optional, number, default: 5): Number of results to return (1-10)
+- `query` (optional, string): Single search query to execute. Can be used alone or combined with `keywords`
+- `keywords` (optional, array of strings): Array of keywords to search. Each keyword is searched separately, results are combined and deduplicated. Can be used alone or combined with `query`
+- `limit` (optional, number, default: 5): Number of results to return (1-10). When using keywords, this is the total limit after deduplication
 - `includeContent` (optional, boolean, default: true): Whether to fetch full page content
 - `maxContentLength` (optional, number): Maximum characters per result content (0 = no limit)
 - `domains` (optional, array of strings): Array of domains to filter search results. Results will be limited to these domains. Domains are normalized automatically (e.g., "www.example.com" becomes "example.com")
 
-**Response:**
+**Note:** At least one of `query` or `keywords` must be provided. If both are provided, `query` is treated as an additional keyword.
+
+**Response (Single Query):**
 ```json
 {
   "success": true,
@@ -76,6 +107,29 @@ Search the web and fetch complete page content from top results.
       "fullContent": "Full page content here...",
       "wordCount": 1500,
       "contentTruncated": false
+    }
+  ]
+}
+```
+
+**Response (Keywords Search):**
+```json
+{
+  "success": true,
+  "keywords_searched": ["Python web scraping", "Python tutorial", "web scraping guide"],
+  "total_unique_results": 8,
+  "search_time_ms": 3500,
+  "status": "Searched 3 keywords; 8 unique results (2 PDFs filtered); Successfully extracted: 8; Failed: 0",
+  "results": [
+    {
+      "title": "Web Scraping with Python",
+      "url": "https://example.com/tutorial",
+      "description": "A comprehensive guide to web scraping...",
+      "timestamp": "2024-01-01T00:00:00.000Z",
+      "fetchStatus": "success",
+      "fullContent": "Full page content here...",
+      "wordCount": 1500,
+      "found_by_keyword": ["Python web scraping", "web scraping guide"]
     }
   ]
 }
@@ -100,6 +154,37 @@ curl -X POST http://localhost:3000/api/search \
     "query": "Python tutorials",
     "limit": 5,
     "domains": ["github.com", "stackoverflow.com"]
+  }'
+```
+
+**Example with Multiple Keywords:**
+```bash
+curl -X POST http://localhost:3000/api/search \
+  -H "Content-Type: application/json" \
+  -d '{
+    "keywords": [
+      "الهيئة العامة للمنشآت الصغيرة والمتوسطة",
+      "هيئة المنشآت الصغيرة والمتوسطة",
+      "مركز دعم المنشآت"
+    ],
+    "limit": 10,
+    "includeContent": true,
+    "domains": ["spa.gov.sa", "aleqt.com"]
+  }'
+```
+
+**Example with Both Query and Keywords:**
+```bash
+curl -X POST http://localhost:3000/api/search \
+  -H "Content-Type: application/json" \
+  -d '{
+    "query": "منشآت",
+    "keywords": [
+      "الهيئة العامة للمنشآت الصغيرة والمتوسطة",
+      "مركز دعم المنشآت"
+    ],
+    "limit": 10,
+    "domains": ["spa.gov.sa"]
   }'
 ```
 
