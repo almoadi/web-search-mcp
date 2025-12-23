@@ -46,7 +46,8 @@ Search the web and fetch complete page content from top results.
   "query": "Python web scraping tutorial",
   "limit": 5,
   "includeContent": true,
-  "maxContentLength": 5000
+  "maxContentLength": 5000,
+  "domains": ["github.com", "stackoverflow.com"]
 }
 ```
 
@@ -55,6 +56,7 @@ Search the web and fetch complete page content from top results.
 - `limit` (optional, number, default: 5): Number of results to return (1-10)
 - `includeContent` (optional, boolean, default: true): Whether to fetch full page content
 - `maxContentLength` (optional, number): Maximum characters per result content (0 = no limit)
+- `domains` (optional, array of strings): Array of domains to filter search results. Results will be limited to these domains. Domains are normalized automatically (e.g., "www.example.com" becomes "example.com")
 
 **Response:**
 ```json
@@ -90,6 +92,17 @@ curl -X POST http://localhost:3000/api/search \
   }'
 ```
 
+**Example with Domain Filtering:**
+```bash
+curl -X POST http://localhost:3000/api/search \
+  -H "Content-Type: application/json" \
+  -d '{
+    "query": "Python tutorials",
+    "limit": 5,
+    "domains": ["github.com", "stackoverflow.com"]
+  }'
+```
+
 ---
 
 ### 3. Web Search Summaries (Lightweight)
@@ -102,13 +115,15 @@ Search the web and return only search result snippets/descriptions without follo
 ```json
 {
   "query": "React hooks best practices",
-  "limit": 10
+  "limit": 10,
+  "domains": ["react.dev", "github.com"]
 }
 ```
 
 **Parameters:**
 - `query` (required, string): Search query to execute
 - `limit` (optional, number, default: 5): Number of search results to return (1-10)
+- `domains` (optional, array of strings): Array of domains to filter search results. Results will be limited to these domains. Domains are normalized automatically (e.g., "www.example.com" becomes "example.com")
 
 **Response:**
 ```json
@@ -136,6 +151,17 @@ curl -X POST http://localhost:3000/api/search/summaries \
   -d '{
     "query": "React hooks",
     "limit": 5
+  }'
+```
+
+**Example with Domain Filtering:**
+```bash
+curl -X POST http://localhost:3000/api/search/summaries \
+  -H "Content-Type: application/json" \
+  -d '{
+    "query": "React hooks",
+    "limit": 5,
+    "domains": ["react.dev", "github.com"]
   }'
 ```
 

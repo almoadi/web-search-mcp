@@ -62,7 +62,7 @@ class WebSearchAPIServer {
       try {
         console.log(`[API] POST /api/search - Body:`, JSON.stringify(req.body, null, 2));
 
-        const { query, limit = 5, includeContent = true, maxContentLength } = req.body;
+        const { query, limit = 5, includeContent = true, maxContentLength, domains } = req.body;
 
         // Validate query
         if (!query || typeof query !== 'string') {
@@ -108,11 +108,27 @@ class WebSearchAPIServer {
           validatedMaxContentLength = maxLengthValue === 0 ? undefined : maxLengthValue;
         }
 
+        // Validate domains
+        let validatedDomains: string[] | undefined;
+        if (domains !== undefined) {
+          if (!Array.isArray(domains)) {
+            return res.status(400).json({
+              error: 'Invalid request',
+              message: 'domains must be an array of strings',
+            });
+          }
+          validatedDomains = domains.filter((d): d is string => typeof d === 'string');
+          if (validatedDomains.length === 0) {
+            validatedDomains = undefined;
+          }
+        }
+
         const validatedArgs: WebSearchToolInput = {
           query,
           limit: validatedLimit,
           includeContent: validatedIncludeContent,
           maxContentLength: validatedMaxContentLength,
+          domains: validatedDomains,
         };
 
         console.log(`[API] Starting web search with validated args:`, JSON.stringify(validatedArgs, null, 2));
@@ -169,7 +185,7 @@ class WebSearchAPIServer {
       try {
         console.log(`[API] POST /api/search/summaries - Body:`, JSON.stringify(req.body, null, 2));
 
-        const { query, limit = 5 } = req.body;
+        const { query, limit = 5, domains } = req.body;
 
         // Validate query
         if (!query || typeof query !== 'string') {
@@ -192,12 +208,28 @@ class WebSearchAPIServer {
           validatedLimit = limitValue;
         }
 
+        // Validate domains
+        let validatedDomains: string[] | undefined;
+        if (domains !== undefined) {
+          if (!Array.isArray(domains)) {
+            return res.status(400).json({
+              error: 'Invalid request',
+              message: 'domains must be an array of strings',
+            });
+          }
+          validatedDomains = domains.filter((d): d is string => typeof d === 'string');
+          if (validatedDomains.length === 0) {
+            validatedDomains = undefined;
+          }
+        }
+
         console.log(`[API] Starting web search summaries...`);
 
         const startTime = Date.now();
         const searchResponse = await this.searchEngine.search({
           query,
           numResults: validatedLimit,
+          domains: validatedDomains,
         });
 
         const searchTime = Date.now() - startTime;
@@ -327,20 +359,26 @@ class WebSearchAPIServer {
 
   private async handleWebSearch(input: WebSearchToolInput): Promise<WebSearchToolOutput> {
     const startTime = Date.now();
-    const { query, limit = 5, includeContent = true } = input;
+    const { query, limit = 5, includeContent = true, domains } = input;
 
-    console.log(`[API] handleWebSearch called with limit=${limit}, includeContent=${includeContent}`);
+    console.log(`[API] handleWebSearch called with limit=${limit}, includeContent=${includeContent}, domains=${domains ? domains.join(', ') : 'none'}`);
 
     try {
       // Request extra search results to account for potential PDF files that will be skipped
-      const searchLimit = includeContent ? Math.min(limit * 2 + 2, 10) : limit;
+      // When domain filtering is active, request even more results since some will be filtered out
+      // Request up to 2x the limit or at least 5 extra results, capped at 10 (Google's max)
+      // If domains are specified, request the maximum (10) to account for filtering
+      const searchLimit = includeContent 
+        ? (domains && domains.length > 0 ? 10 : Math.min(limit * 2 + 2, 10))
+        : (domains && domains.length > 0 ? Math.min(limit * 3, 10) : limit);
 
-      console.log(`[API] Requesting ${searchLimit} search results to get ${limit} non-PDF content results`);
+      console.log(`[API] Requesting ${searchLimit} search results to get ${limit} non-PDF content results${domains && domains.length > 0 ? ' (with domain filtering)' : ''}`);
 
       // Perform the search
       const searchResponse = await this.searchEngine.search({
         query,
         numResults: searchLimit,
+        domains,
       });
       const searchResults = searchResponse.results;
 

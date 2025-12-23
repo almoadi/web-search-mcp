@@ -58,4 +58,88 @@ export function isPdfUrl(url: string): boolean {
     // If URL parsing fails, check the raw string as fallback
     return url.toLowerCase().endsWith('.pdf');
   }
+}
+
+/**
+ * Normalizes a domain by removing protocol, www prefix, and trailing slashes
+ * @param domain - Domain string (e.g., "https://www.example.com/", "www.example.com", "example.com")
+ * @returns Normalized domain (e.g., "example.com")
+ */
+export function normalizeDomain(domain: string): string {
+  let normalized = domain.trim().toLowerCase();
+  
+  // Remove protocol (http://, https://)
+  normalized = normalized.replace(/^https?:\/\//, '');
+  
+  // Remove www. prefix
+  normalized = normalized.replace(/^www\./, '');
+  
+  // Remove trailing slash and path
+  normalized = normalized.split('/')[0];
+  
+  // Remove port if present
+  normalized = normalized.split(':')[0];
+  
+  return normalized;
+}
+
+/**
+ * Extracts the domain from a URL
+ * @param url - URL string
+ * @returns Normalized domain (e.g., "example.com")
+ */
+export function extractDomainFromUrl(url: string): string {
+  try {
+    const urlObj = new URL(url);
+    return normalizeDomain(urlObj.hostname);
+  } catch {
+    // If URL parsing fails, try to extract domain manually
+    return normalizeDomain(url);
+  }
+}
+
+/**
+ * Checks if a URL matches any of the allowed domains
+ * @param url - URL to check
+ * @param allowedDomains - Array of normalized domains to match against
+ * @returns True if the URL's domain matches any of the allowed domains
+ */
+export function urlMatchesDomain(url: string, allowedDomains: string[]): boolean {
+  if (!allowedDomains || allowedDomains.length === 0) {
+    return true; // No filtering if no domains specified
+  }
+  
+  const urlDomain = extractDomainFromUrl(url);
+  return allowedDomains.includes(urlDomain);
+}
+
+/**
+ * Builds a domain-filtered search query using site: operators
+ * @param query - Original search query
+ * @param domains - Array of domains to filter by
+ * @returns Modified query with site: operators (e.g., "query site:example.com OR site:github.com")
+ */
+export function buildDomainFilteredQuery(query: string, domains: string[]): string {
+  if (!domains || domains.length === 0) {
+    return query;
+  }
+  
+  // Normalize all domains
+  const normalizedDomains = domains
+    .map(domain => normalizeDomain(domain))
+    .filter(domain => domain.length > 0); // Remove empty domains
+  
+  if (normalizedDomains.length === 0) {
+    return query;
+  }
+  
+  // Build site: operators
+  if (normalizedDomains.length === 1) {
+    // Single domain: "query site:example.com"
+    return `${query} site:${normalizedDomains[0]}`;
+  } else {
+    // Multiple domains: "query (site:example.com OR site:github.com)"
+    const siteOperators = normalizedDomains.map(domain => `site:${domain}`).join(' OR ');
+    return `${query} (${siteOperators})`;
+  }
 } 
